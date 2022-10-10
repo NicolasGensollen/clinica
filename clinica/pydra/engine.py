@@ -9,6 +9,40 @@ import clinica.pydra.engine_utils as pu
 from clinica.pydra.interfaces import bids_reader, bids_writer, caps_reader
 
 
+def clinica_pipeline(name: str):
+    """Decorator to add a Clinica pipeline to any Pydra workflow."""
+
+    def decorator(func):
+        import click
+
+        from clinica.pipelines import cli_param
+
+        @functools.wraps(func)
+        @click.command(name=name, hidden=True)
+        @cli_param.argument.bids_directory
+        @cli_param.argument.caps_directory
+        def cli(bids_directory: str, caps_directory: str, parameters: dict):
+            import importlib
+
+            parts = name.split("-")
+            assert parts[0] == "pydra"
+            module_name = "_".join(parts[1:])
+            mod = importlib.import_module(module_name)
+            core_workflow_factory = getattr(mod, "build_core_workflow")
+
+            pipeline = core_workflow_factory(
+                name=name,
+                input_dir=bids_directory,
+                output_dir=caps_directory,
+                parameters=parameters,
+            )
+            pu.run(pipeline)
+
+        return cli
+
+    return decorator
+
+
 def clinica_io(func):
     """Decorator to add BIDS reader/writer to any Pydra workflow."""
 

@@ -7,7 +7,7 @@ from nipype.interfaces.ants import N4BiasFieldCorrection, RegistrationSynQuick
 from pydra import Workflow
 from pydra.mark import annotate, task
 
-from clinica.pydra.engine import clinica_io
+from clinica.pydra.engine import clinica_io, clinica_pipeline
 
 n4_bias_field_correction = N4BiasFieldCorrection(bspline_fitting_distance=300)
 registration_syn_quick = RegistrationSynQuick(transform_type="a")
@@ -65,6 +65,7 @@ def download_ref_template() -> PurePath:
     )
 
 
+@clinica_pipeline(name="pydra-t1-linear")
 @clinica_io
 def build_core_workflow(name: str = "core", parameters={}) -> Workflow:
     """Core workflow for the T1 linear pipeline.

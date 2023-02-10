@@ -183,43 +183,19 @@ def epi_pipeline(
 
     merge_transform = pe.Node(niu.Merge(3), name="MergeTransforms")
 
-    # the nipype function is not used since the results it gives are not
-    # as good as the ones we get by using the command directly.
     apply_transform_image = pe.MapNode(
-        interface=niu.Function(
-            input_names=[
-                "fixed_image",
-                "moving_image",
-                "transforms",
-                "warped_image",
-                "output_warped_image",
-            ],
-            output_names=["warped_image"],
-            function=ants_apply_transforms,
-        ),
+        ants.ApplyTransforms(),
         iterfield=["moving_image"],
         name="warp_image",
     )
-    apply_transform_image.inputs.warped_image = "out_warped.nii.gz"
-    apply_transform_image.inputs.output_warped_image = True
+    apply_transform_image.inputs.output_image = "out_warped.nii.gz"
 
     apply_transform_field = pe.MapNode(
-        interface=niu.Function(
-            input_names=[
-                "fixed_image",
-                "moving_image",
-                "transforms",
-                "warped_image",
-                "output_warped_image",
-            ],
-            output_names=["warped_image"],
-            function=ants_apply_transforms,
-        ),
+        ants.ApplyTransforms(),
         iterfield=["moving_image"],
         name="warp_field",
     )
-    apply_transform_field.inputs.warped_image = "out_warped_field.nii.gz"
-    apply_transform_field.inputs.output_warped_image = False
+    apply_transform_field.inputs.output_image = "[out_warped_field.nii.gz, 1]"
 
     jacobian = pe.MapNode(
         interface=ants.CreateJacobianDeterminantImage(),
@@ -295,12 +271,12 @@ def epi_pipeline(
             (change_transform, merge_transform, [("updated_affine_file", "in1")]),
             (ants_registration, merge_transform, [("out_matrix", "in2")]),
             (ants_registration, merge_transform, [("forward_warp_field", "in3")]),
-            (inputnode, apply_transform_image, [("T1", "fixed_image")]),
-            (split, apply_transform_image, [("out_files", "moving_image")]),
+            (inputnode, apply_transform_image, [("T1", "reference_image")]),
+            (split, apply_transform_image, [("out_files", "input_image")]),
             (merge_transform, apply_transform_image, [("out", "transforms")]),
 
-            (inputnode, apply_transform_field, [("T1", "fixed_image")]),
-            (split, apply_transform_field, [("out_files", "moving_image")]),
+            (inputnode, apply_transform_field, [("T1", "reference_image")]),
+            (split, apply_transform_field, [("out_files", "input_image")]),
             (merge_transform, apply_transform_field, [("out", "transforms")]),
 
             (apply_transform_field, jacobian, [("warped_image", "deformationField")]),
@@ -308,7 +284,7 @@ def epi_pipeline(
             (jacobian, jacmult, [("jacobian_image", "in_file")]),
             (jacmult, thres, [("out_file", "in_file")]),
             (thres, merge, [("out_file", "in_files")]),
-            
+
             (merge, outputnode, [("merged_file", "DWIs_epicorrected")]),
             (flirt_b0_2_t1, outputnode, [("out_matrix_file", "DWI_2_T1_Coregistration_matrix")]),
             (ants_registration, outputnode, [("forward_warp_field", "epi_correction_deformation_field"),
@@ -317,8 +293,8 @@ def epi_pipeline(
             (merge_transform, outputnode, [("out", "warp_epi")]),
             (rot_bvec, outputnode, [("out_file", "out_bvec")]),
 
-            
-            
+
+
         ]
     )
     if delete_cache:

@@ -160,30 +160,6 @@ def rotate_bvecs(in_bvec, in_matrix):
     return out_file
 
 
-def ants_apply_transforms(
-    fixed_image, moving_image, transforms, warped_image, output_warped_image=True
-) -> None:
-    import os
-    import subprocess
-
-    # Convert to absolute path.
-    warped_image = os.path.abspath(warped_image)
-
-    # Whether we want the warped image or transformation field as output.
-    output = f"{warped_image}" if output_warped_image else f"[{warped_image}, 1]"
-
-    # Common template for the command.
-    cmd = (
-        f"antsApplyTransforms -o {output} -i {moving_image} -r {fixed_image} "
-        f"-t {transforms[0]} -t {transforms[1]} -t {transforms[2]}"
-    )
-
-    # Perform the actual call.
-    subprocess.run(cmd, shell=True)
-
-    return warped_image
-
-
 def init_input_node(t1w, dwi, bvec, bval, dwi_json):
     """Initialize the pipeline."""
     from clinica.utils.dwi import bids_dir_to_fsl_dir, check_dwi_volume

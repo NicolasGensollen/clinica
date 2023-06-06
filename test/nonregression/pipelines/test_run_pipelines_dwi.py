@@ -91,6 +91,33 @@ def test_dwi_eddy_fsl(cmdopt, tmp_path):
     assert_array_almost_equal(out_bvecs, ref_bvecs)
 
 
+def test_dwi_epi_pipeline(cmdopt, tmp_path):
+    from clinica.pipelines.dwi_preprocessing_using_t1.dwi_preprocessing_using_t1_workflows import (
+        epi_pipeline,
+    )
+
+    base_dir = Path(cmdopt["input"])
+    input_dir, tmp_dir, ref_dir = configure_paths(base_dir, tmp_path, "DWIEPI")
+    (tmp_path / "tmp").mkdir()
+    epi = epi_pipeline(
+        base_dir=str(tmp_path / "tmp"),
+        delete_cache=False,
+        output_dir=str(tmp_path / "tmp"),
+    )
+    epi.inputs.inputnode.T1 = str(input_dir / "sub-01_ses-M000_T1w.nii.gz")
+    epi.inputs.inputnode.DWI = str(input_dir / "eddy_corrected.nii.gz")
+    epi.inputs.inputnode.bvec = str(input_dir / "eddy_corrected.eddy_rotated_bvecs")
+
+    epi.run()
+
+    out_file = fspath(
+        tmp_path / "tmp" / "out_corrected" / "DWI_2_T1_Coregistration_matrix"
+    )
+    ref_file = fspath(ref_dir / "DWI_2_T1_Coregistration_matrix" / "vol0000_flirt.mat")
+
+    assert similarity_measure(out_file, ref_file, 0.97)
+
+
 @pytest.mark.slow
 def test_dwi_preprocessing_using_t1(cmdopt, tmp_path):
     base_dir = Path(cmdopt["input"])

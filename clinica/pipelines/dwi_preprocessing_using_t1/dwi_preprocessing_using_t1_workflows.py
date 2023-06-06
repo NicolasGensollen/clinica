@@ -195,6 +195,7 @@ def epi_pipeline(
     base_dir: str,
     delete_cache: bool = False,
     name="susceptibility_distortion_correction_using_t1",
+    output_dir=None,
 ):
     """Perform EPI correction.
 
@@ -228,6 +229,7 @@ def epi_pipeline(
     import nipype.interfaces.ants as ants
     import nipype.interfaces.c3 as c3
     import nipype.interfaces.fsl as fsl
+    import nipype.interfaces.io as nio
     import nipype.interfaces.utility as niu
     import nipype.pipeline.engine as pe
 
@@ -383,6 +385,11 @@ def epi_pipeline(
         name="outputnode",
     )
 
+    if output_dir:
+        write_results = pe.Node(name="write_results", interface=nio.DataSink())
+        write_results.inputs.base_directory = output_dir
+        write_results.inputs.parameterization = False
+
     wf = pe.Workflow(name="epi_pipeline")
     # fmt: off
     wf.connect(
@@ -434,6 +441,18 @@ def epi_pipeline(
         wf.connect(
             [
                 (merge, delete_warp_field_tmp, [("merged_file", "checkpoint")])
+            ]
+        )
+
+    if output_dir:
+        wf.connect(
+            [
+                (outputnode, write_results, [("DWI_2_T1_Coregistration_matrix", "DWI_2_T1_Coregistration_matrix")]),
+                (outputnode, write_results, [("epi_correction_deformation_field", "epi_correction_deformation_field")]),
+                (outputnode, write_results, [("epi_correction_affine_transform", "epi_correction_affine_transform")]),
+                (outputnode, write_results, [("epi_correction_image_warped", "epi_correction_image_warped")]),
+                (outputnode, write_results, [("warp_epi", "warp_epi")]),
+                (outputnode, write_results, [("out_bvec", "out_bvec")]),
             ]
         )
     # fmt: on

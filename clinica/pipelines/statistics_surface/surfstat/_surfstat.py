@@ -125,6 +125,8 @@ def clinica_surfstat(
     cluster_threshold : float, optional
         The threshold to be used to declare clusters as significant. Default=0.05.
     """
+    from clinica.utils.stream import cprint
+
     from ._utils import (
         build_thickness_array,
         get_average_surface,
@@ -134,10 +136,13 @@ def clinica_surfstat(
     from .models import GLMModelType, create_glm_model
 
     df_subjects = read_and_check_tsv_file(tsv_file)
+    cprint(f"Pipeline will run on {len(df_subjects)} subjects.", lvl="info")
     surface_file: str = surface_file or get_t1_freesurfer_custom_file_template(
         input_dir
     )
+    cprint(f"Using surface file: {surface_file}.", lvl="info")
     thickness = build_thickness_array(input_dir, surface_file, df_subjects, fwhm)
+    cprint(f"Cortical thickness array loaded. Shape is {thickness.shape}.", lvl="info")
 
     # Load average surface template
     average_surface, average_mesh = get_average_surface(
@@ -157,6 +162,11 @@ def clinica_surfstat(
         threshold_corrected_pvalue=threshold_corrected_pvalue,
         cluster_threshold=cluster_threshold,
     )
+    cprint(f"Fitting a {glm_type} GLM model...", lvl="info")
     glm_model.fit(thickness, average_surface)
+
+    cprint(f"Saving model in {output_dir}.", lvl="info")
     glm_model.save_results(output_dir, ["json", "mat"])
+
+    cprint(f"Saving plots in {output_dir}.", lvl="info")
     glm_model.plot_results(output_dir, ["nilearn_plot_surf_stat_map"], average_mesh)

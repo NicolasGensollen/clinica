@@ -162,9 +162,15 @@ class StatisticsResults(Results):
         threshold_corrected_p_value : float
             The threshold to use with corrected P-values.
         """
+        from clinica.utils.stream import cprint
+
         idx = np.argwhere(np.isnan(model.t))
-        corrected_pvals = model.P["pval"]["P"]
-        corrected_pvals[idx] = 1.0
+        if np.any(idx):
+            cprint(
+                f"The T-values contain nans at the following indices: {idx}. "
+                "These will be set to a T-value of 0 and corrected P-value of 1.",
+                lvl="warning",
+            )
         tstats = np.nan_to_num(model.t)
         uncorrected_p_values = PValueResults.from_t_statistics(
             tstats,
@@ -172,12 +178,29 @@ class StatisticsResults(Results):
             mask,
             threshold_uncorrected_p_value,
         )
+        idx2 = np.argwhere(np.isnan(uncorrected_p_values))
+        if np.any(idx2):
+            cprint(
+                f"The uncorrected P-values contain nans at the following indices: {idx2}. "
+                "These will be set to 1.",
+                lvl="warning",
+            )
+        uncorrected_p_values = np.nan_to_num(uncorrected_p_values)
+        corrected_pvals = model.P["pval"]["P"]
+        corrected_pvals[idx] = 1.0
         corrected_p_values = CorrectedPValueResults(
             corrected_pvals,
             mask,
             threshold_corrected_p_value,
             model.P["pval"]["C"],
         )
+        idx3 = np.argwhere(np.isnan(model.coef))
+        if np.any(idx3):
+            cprint(
+                f"The model's coefficients contain nans at the following indices: {idx3}. "
+                "These will be set to 0.",
+                lvl="warning",
+            )
         return cls(
             np.nan_to_num(model.coef),
             tstats,

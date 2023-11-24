@@ -156,9 +156,11 @@ def get_average_surface(fsaverage_path: Path) -> Tuple[Dict, Mesh]:
         load_surf_mesh(str(fsaverage_path / f"{hemi}.pial")) for hemi in ("lh", "rh")
     ]
     coordinates = np.vstack([mesh.coordinates for mesh in meshes])
+    _verify_finite(coordinates, "mesh coordinates")
     faces = np.vstack(
         [meshes[0].faces, meshes[1].faces + meshes[0].coordinates.shape[0]]
     )
+    _verify_finite(faces, "faces")
     average_mesh = Mesh(
         coordinates=coordinates,
         faces=copy.deepcopy(faces),
@@ -177,3 +179,11 @@ def get_average_surface(fsaverage_path: Path) -> Tuple[Dict, Mesh]:
         "tri": faces,
     }
     return average_surface, average_mesh
+
+
+def _verify_finite(array: np.ndarray, name: str) -> None:
+    from clinica.utils.stream import cprint
+
+    if not np.isfinite(array).all():
+        raise ValueError(f"The {name} array contains non finite values: {array}")
+    cprint(f"The {name} array has shape {array.shape}.", lvl="info")

@@ -40,15 +40,13 @@ def convert_adni_av45_fbb_pet(
         If specified, it should be between 1 and the number of available CPUs.
         Default=1.
     """
-    from os import path
-
-    import pandas as pd
-
     from clinica.iotools.converters.adni_to_bids.adni_utils import (
         load_clinical_csv,
         paths_to_bids,
     )
     from clinica.utils.stream import cprint
+
+    from ._modalities import ADNIModality
 
     if not subjects:
         adni_merge = load_clinical_csv(csv_dir, "ADNIMERGE")
@@ -62,13 +60,21 @@ def convert_adni_av45_fbb_pet(
         "Paths of AV45 and Florbetaben PET images found. Exporting images into BIDS ..."
     )
     paths_to_bids(
-        images,
+        images[images.Tracer == "AV45"],
         destination_dir,
-        "av45_fbb",
+        ADNIModality.PET_AV45,
         mod_to_update=mod_to_update,
         n_procs=n_procs,
     )
-    cprint(msg="AV45 and Florbetaben PET conversion done.", lvl="debug")
+    cprint(msg="AV45 PET conversion done.", lvl="debug")
+    paths_to_bids(
+        images[images.Tracer == "FBB"],
+        destination_dir,
+        ADNIModality.PET_FBB,
+        mod_to_update=mod_to_update,
+        n_procs=n_procs,
+    )
+    cprint(msg="Florbetaben PET conversion done.", lvl="debug")
 
 
 def compute_av45_fbb_pet_paths(source_dir, csv_dir, subjs_list, conversion_dir):

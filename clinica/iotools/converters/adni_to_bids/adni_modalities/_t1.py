@@ -40,15 +40,13 @@ def convert_adni_t1(
         If specified, it should be between 1 and the number of available CPUs.
         Default=1.
     """
-    from os import path
-
-    from pandas.io import parsers
-
     from clinica.iotools.converters.adni_to_bids.adni_utils import (
         load_clinical_csv,
         paths_to_bids,
     )
     from clinica.utils.stream import cprint
+
+    from ._modalities import ADNIModality
 
     if not subjects:
         adni_merge = load_clinical_csv(csv_dir, "ADNIMERGE")
@@ -58,9 +56,14 @@ def convert_adni_t1(
         f"Calculating paths of T1 images. Output will be stored in {conversion_dir}."
     )
     images = compute_t1_paths(source_dir, csv_dir, subjects, conversion_dir)
+    images.to_csv("t1_images.tsv", sep="\t")
     cprint("Paths of T1 images found. Exporting images into BIDS ...")
     paths_to_bids(
-        images, destination_dir, "t1", mod_to_update=mod_to_update, n_procs=n_procs
+        images,
+        destination_dir,
+        ADNIModality.T1,
+        mod_to_update=mod_to_update,
+        n_procs=n_procs,
     )
     cprint(msg="T1 conversion done.", lvl="debug")
 

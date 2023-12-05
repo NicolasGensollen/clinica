@@ -1,9 +1,9 @@
-"""Module for converting fMRI of ADNI."""
+"""Module for converting DWI of ADNI."""
 from os import PathLike
 from typing import List, Optional
 
 
-def convert_adni_fmri(
+def convert_adni_dwi(
     source_dir: PathLike,
     csv_dir: PathLike,
     destination_dir: PathLike,
@@ -12,7 +12,7 @@ def convert_adni_fmri(
     mod_to_update: bool = False,
     n_procs: Optional[int] = 1,
 ):
-    """Convert fMR images of ADNI into BIDS format.
+    """Convert DW images of ADNI into BIDS format.
 
     Parameters
     ----------
@@ -40,34 +40,36 @@ def convert_adni_fmri(
         If specified, it should be between 1 and the number of available CPUs.
         Default=1.
     """
-    from os import path
-
-    import pandas as pd
-
     from clinica.iotools.converters.adni_to_bids.adni_utils import (
         load_clinical_csv,
         paths_to_bids,
     )
     from clinica.utils.stream import cprint
 
+    from ._modalities import ADNIModality
+
     if not subjects:
         adni_merge = load_clinical_csv(csv_dir, "ADNIMERGE")
         subjects = list(adni_merge.PTID.unique())
 
     cprint(
-        f"Calculating paths of fMRI images. Output will be stored in {conversion_dir}."
+        f"Calculating paths of DWI images. Output will be stored in {conversion_dir}."
     )
-    images = compute_fmri_path(source_dir, csv_dir, subjects, conversion_dir)
-    cprint("Paths of fMRI images found. Exporting images into BIDS ...")
-    # fmri_paths_to_bids(dest_dir, images)
+    images = compute_dwi_paths(source_dir, csv_dir, subjects, conversion_dir)
+    cprint("Paths of DWI images found. Exporting images into BIDS ...")
+    # dwi_paths_to_bids(images, dest_dir)
     paths_to_bids(
-        images, destination_dir, "fmri", mod_to_update=mod_to_update, n_procs=n_procs
+        images,
+        destination_dir,
+        ADNIModality.DWI,
+        mod_to_update=mod_to_update,
+        n_procs=n_procs,
     )
-    cprint(msg="fMRI conversion done.", lvl="debug")
+    cprint(msg="DWI conversion done.", lvl="debug")
 
 
-def compute_fmri_path(source_dir, csv_dir, subjs_list, conversion_dir):
-    """Compute the paths to fMR images.
+def compute_dwi_paths(source_dir, csv_dir, subjs_list, conversion_dir):
+    """Compute paths to DW images to convert to BIDS.
 
     Args:
         source_dir: path to the ADNI directory
@@ -76,7 +78,7 @@ def compute_fmri_path(source_dir, csv_dir, subjs_list, conversion_dir):
         conversion_dir: path to the TSV files including the paths to original images
 
     Returns:
-        pandas Dataframe containing the path for each fmri
+        images: pandas dataframe that contains the path to all the DW images to convert
     """
     from os import path
 
@@ -88,49 +90,36 @@ def compute_fmri_path(source_dir, csv_dir, subjs_list, conversion_dir):
         visits_to_timepoints,
     )
 
-    fmri_col = [
+    dwi_col_df = [
         "Subject_ID",
         "VISCODE",
         "Visit",
         "Sequence",
         "Scan_Date",
         "Study_ID",
-        "Field_Strength",
         "Series_ID",
         "Image_ID",
+        "Field_Strength",
     ]
-    fmri_df = pd.DataFrame(columns=fmri_col)
-    fmri_dfs_list = []
+    dwi_df = pd.DataFrame(columns=dwi_col_df)
+    dwi_dfs_list = []
 
     # Loading needed .csv files
     adni_merge = load_clinical_csv(csv_dir, "ADNIMERGE")
-
     mayo_mri_qc = load_clinical_csv(csv_dir, "MAYOADIRL_MRI_IMAGEQC_12_08_15")
+    mayo_mri_qc = mayo_mri_qc[mayo_mri_qc.series_type == "DTI"]
 
-    mayo_mri_qc = mayo_mri_qc[mayo_mri_qc.series_type == "fMRI"]
-    mayo_mri_qc.columns = [x.upper() for x in mayo_mri_qc.columns]
-
-    mayo_mri_qc3 = load_clinical_csv(csv_dir, "MAYOADIRL_MRI_QUALITY_ADNI3")
-    mayo_mri_qc3 = mayo_mri_qc3[mayo_mri_qc3.SERIES_TYPE == "EPB"]
-
-    # Concatenating visits in both QC files
-    mayo_mri_qc = pd.concat(
-        [mayo_mri_qc, mayo_mri_qc3], axis=0, ignore_index=True, sort=False
-    )
     mri_list = load_clinical_csv(csv_dir, "MRILIST")
 
-    # Selecting only fMRI images that are not Multiband
-    mri_list = mri_list[
-        mri_list.SEQUENCE.str.contains("MRI")
-    ]  # 'MRI' includes all fMRI and fMRI scans, but not others
-    unwanted_sequences = ["MB"]
+    # Selecting only DTI images that are not Multiband, processed or enhanced images
+    mri_list = mri_list[mri_list.SEQUENCE.str.contains("dti", case=False, na=False)]
+    unwanted_sequences = ["MB", "ADC", "FA", "TRACEW", "Enhanced", "Reg"]
     mri_list = mri_list[
         mri_list.SEQUENCE.map(
             lambda x: not any(subs in x for subs in unwanted_sequences)
         )
     ]
 
-    # We will convert the images for each subject in the subject list
     for subj in subjs_list:
         # Filter ADNIMERGE, MRI_LIST and QC for only one subject and sort the rows/visits by examination date
         adnimerge_subj = adni_merge[adni_merge.PTID == subj]
@@ -142,63 +131,131 @@ def compute_fmri_path(source_dir, csv_dir, subjs_list, conversion_dir):
         mayo_mri_qc_subj = mayo_mri_qc[mayo_mri_qc.RID == int(subj[-4:])]
 
         # Obtain corresponding timepoints for the subject visits
-        visits = visits_to_timepoints(subj, mri_list_subj, adnimerge_subj, "fMRI")
+        visits = visits_to_timepoints(subj, mri_list_subj, adnimerge_subj, "DWI")
 
         for visit_info in visits.keys():
             timepoint = visit_info[0]
             visit_str = visits[visit_info]
 
             visit_mri_list = mri_list_subj[mri_list_subj.VISIT == visit_str]
-            image = fmri_image(
+            axial = dwi_image(
                 subj, timepoint, visits[visit_info], visit_mri_list, mayo_mri_qc_subj
             )
 
-            if image is not None:
+            if axial is not None:
                 row_to_append = pd.DataFrame(
-                    image,
+                    axial,
                     index=[
                         "i",
                     ],
                 )
-                fmri_dfs_list.append(row_to_append)
+                dwi_dfs_list.append(row_to_append)
 
-    if fmri_dfs_list:
-        fmri_df = pd.concat(fmri_dfs_list, ignore_index=True)
+    if dwi_dfs_list:
+        dwi_df = pd.concat(dwi_dfs_list, ignore_index=True)
 
     # Exceptions
     # ==========
     conversion_errors = [
+        ("029_S_2395", "m60"),
+        ("029_S_0824", "m108"),
+        ("029_S_0914", "m108"),
+        ("027_S_2219", "m36"),
+        ("129_S_2332", "m12"),
+        ("029_S_4384", "m48"),
+        ("029_S_4385", "m48"),
+        ("029_S_4585", "m48"),
+        ("016_S_4591", "m24"),
+        ("094_S_4630", "m06"),
+        ("094_S_4649", "m06"),
+        ("029_S_5219", "m24"),
+        ("094_S_2238", "m48"),
+        ("129_S_4287", "bl"),
+        ("007_S_4611", "m03"),
+        ("016_S_4638", "bl"),
+        ("027_S_5118", "bl"),
+        ("098_S_4018", "bl"),
+        ("098_S_4003", "m12"),
+        ("016_S_4584", "m24"),
+        ("016_S_5007", "m12"),
+        ("129_S_2347", "m06"),
+        ("129_S_4220", "bl"),
+        ("007_S_2058", "m12"),
+        ("016_S_2007", "m06"),
+        ("020_S_6358", "bl"),
+        ("114_S_6039", "m12"),
+        ("114_S_6057", "bl"),
+        ("153_S_6274", "bl"),
         ("006_S_4485", "m84"),
-        ("123_S_4127", "m96"),
-        # Eq_1
-        ("094_S_4503", "m24"),
-        ("009_S_4388", "m72"),
-        ("036_S_6088", "bl"),
-        ("036_S_6134", "bl"),
-        ("016_S_6802", "bl"),
-        ("016_S_6816", "bl"),
-        ("126_S_4891", "m84"),
-        # Multiple images
+        ("153_S_6237", "bl"),
+        ("153_S_6336", "bl"),
+        ("153_S_6450", "bl"),
+        ("003_S_4441", "m12"),
+        # Eq_1 Images
+        ("006_S_6252", "m12"),
+        ("010_S_0419", "m156"),
+        ("127_S_0259", "m156"),
+        ("129_S_6830", "bl"),
+        ("135_S_6104", "m24"),
+        ("021_S_5237", "m84"),
+        ("027_S_2245", "m120"),
+        ("099_S_6396", "m24"),
+        ("126_S_4507", "m96"),
+        ("126_S_4891", "m96"),
+        ("126_S_4896", "m96"),
+        ("126_S_6559", "m24"),
+        ("126_S_6724", "m12"),
+        ("127_S_6203", "m24"),
+        ("127_S_6330", "m24"),
+        ("127_S_6512", "m24"),
+        ("127_S_6549", "m24"),
+        ("129_S_6459", "m24"),
+        ("129_S_6763", "m12"),
+        ("129_S_6784", "m12"),
+        ("129_S_6830", "m12"),
+        ("135_S_6446", "m24"),
+        ("301_S_6224", "m36"),
+        # Missing .bval and .bvec
+        ("020_S_5203", "m72"),
+        ("020_S_6185", "m24"),
+        ("020_S_6513", "m12"),
+        ("021_S_0178", "m156"),
+        ("153_S_6336", "m12"),
+        ("153_S_6755", "bl"),
+        ("020_S_6227", "m24"),
+        ("020_S_6449", "m24"),
+        ("020_S_6513", "m24"),
+        # Volume mismatch between .nii and .bvec / .bval
+        ("006_S_6610", "bl"),
+        ("006_S_6682", "bl"),
+        ("006_S_6696", "bl"),
+        ("006_S_6770", "bl"),
+        ("029_S_6289", "bl"),
+        ("130_S_6043", "bl"),
+        ("130_S_6329", "bl"),
+        ("027_S_6183", "m24"),
+        ("123_S_6891", "bl"),
+        # Several output images
         ("029_S_2395", "m72"),
     ]
 
     # Removing known exceptions from images to convert
-    if not fmri_df.empty:
-        error_ind = fmri_df.index[
-            fmri_df.apply(
+    if not dwi_df.empty:
+        error_ind = dwi_df.index[
+            dwi_df.apply(
                 lambda x: ((x.Subject_ID, x.VISCODE) in conversion_errors), axis=1
             )
         ]
-        fmri_df.drop(error_ind, inplace=True)
+        dwi_df.drop(error_ind, inplace=True)
 
     # Checking for images paths in filesystem
-    images = find_image_path(fmri_df, source_dir, "fMRI", "S", "Series_ID")
-    images.to_csv(path.join(conversion_dir, "fmri_paths.tsv"), sep="\t", index=False)
+    images = find_image_path(dwi_df, source_dir, "DWI", "S", "Series_ID")
+    images.to_csv(path.join(conversion_dir, "dwi_paths.tsv"), sep="\t", index=False)
 
     return images
 
 
-def fmri_image(subject_id, timepoint, visit_str, visit_mri_list, mri_qc_subj):
+def dwi_image(subject_id, timepoint, visit_str, visit_mri_list, mri_qc_subj):
     """
     One image among those in the input list is chosen according to QC
     and then corresponding metadata is extracted to a dictionary.
@@ -217,7 +274,6 @@ def fmri_image(subject_id, timepoint, visit_str, visit_mri_list, mri_qc_subj):
         select_image_qc,
     )
 
-    mri_qc_subj.columns = [x.lower() for x in mri_qc_subj.columns]
     sel_image = select_image_qc(list(visit_mri_list.IMAGEUID), mri_qc_subj)
     if not sel_image:
         return None

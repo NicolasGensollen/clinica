@@ -1,6 +1,19 @@
-from typing import List, Optional
+from enum import Enum
+from typing import Optional, Tuple
 
 from clinica.iotools.abstract_converter import Converter
+
+
+class ADNIUserFacingModality(str, Enum):
+    """Modalities supported by the converter."""
+
+    T1 = "T1"
+    PET_FDG = "PET_FDG"
+    PET_AMYLOID = "PET_AMYLOID"
+    PET_TAU = "PET_TAU"
+    DWI = "DWI"
+    FLAIR = "FLAIR"
+    FMRI = "fMRI"
 
 
 def get_bids_subjs_info(
@@ -37,13 +50,13 @@ def get_bids_subjs_info(
 
 class AdniToBids(Converter):
     @classmethod
-    def get_modalities_supported(cls) -> List[str]:
+    def get_modalities_supported(cls) -> Tuple[str]:
         """Return a list of modalities supported.
 
         Returns: a list containing the modalities supported by the converter
         (T1, PET_FDG, PET_AMYLOID, PET_TAU, DWI, FLAIR, fMRI)
         """
-        return ["T1", "PET_FDG", "PET_AMYLOID", "PET_TAU", "DWI", "FLAIR", "fMRI"]
+        return tuple(modality for modality in ADNIUserFacingModality)
 
     @classmethod
     def check_adni_dependencies(cls) -> None:
@@ -169,7 +182,7 @@ class AdniToBids(Converter):
         clinical_dir,
         dest_dir,
         subjs_list_path=None,
-        modalities=None,
+        modalities: Optional[Tuple[str]] = None,
         force_new_extraction=False,
         n_procs: Optional[int] = 1,
     ):
@@ -187,18 +200,10 @@ class AdniToBids(Converter):
         from copy import copy
         from os import path
 
-        import pandas as pd
-
-        import clinica.iotools.converters.adni_to_bids.adni_modalities.adni_av45_fbb_pet as adni_av45_fbb
-        import clinica.iotools.converters.adni_to_bids.adni_modalities.adni_dwi as adni_dwi
-        import clinica.iotools.converters.adni_to_bids.adni_modalities.adni_fdg_pet as adni_fdg
-        import clinica.iotools.converters.adni_to_bids.adni_modalities.adni_flair as adni_flair
-        import clinica.iotools.converters.adni_to_bids.adni_modalities.adni_fmri as adni_fmri
-        import clinica.iotools.converters.adni_to_bids.adni_modalities.adni_pib_pet as adni_pib
-        import clinica.iotools.converters.adni_to_bids.adni_modalities.adni_t1 as adni_t1
-        import clinica.iotools.converters.adni_to_bids.adni_modalities.adni_tau_pet as adni_tau
         from clinica.iotools.converters.adni_to_bids.adni_utils import load_clinical_csv
         from clinica.utils.stream import cprint
+
+        from .adni_modalities import ADNIModalityConverter
 
         modalities = modalities or self.get_modalities_supported()
 
@@ -233,32 +238,14 @@ class AdniToBids(Converter):
         os.makedirs(conversion_dir)
         cprint(dest_dir, lvl="debug")
 
-        converters = {
-            "T1": [adni_t1.convert_adni_t1],
-            "PET_FDG": [
-                adni_fdg.convert_adni_fdg_pet,
-                adni_fdg.convert_adni_fdg_pet_uniform,
-            ],
-            "PET_AMYLOID": [
-                adni_pib.convert_adni_pib_pet,
-                adni_av45_fbb.convert_adni_av45_fbb_pet,
-            ],
-            "PET_TAU": [adni_tau.convert_adni_tau_pet],
-            "DWI": [adni_dwi.convert_adni_dwi],
-            "FLAIR": [adni_flair.convert_adni_flair],
-            "fMRI": [adni_fmri.convert_adni_fmri],
-        }
-
         for modality in modalities:
-            if modality not in converters:
-                raise Exception(f"{modality} is not a valid input modality")
-            for converter in converters[modality]:
-                converter(
-                    source_dir=source_dir,
-                    csv_dir=clinical_dir,
-                    destination_dir=dest_dir,
-                    conversion_dir=conversion_dir,
-                    subjects=subjs_list,
-                    mod_to_update=force_new_extraction,
-                    n_procs=n_procs,
-                )
+            converter = ADNIModalityConverter(modality)
+            converter.convert(
+                source_dir=source_dir,
+                csv_dir=clinical_dir,
+                destination_dir=dest_dir,
+                conversion_dir=conversion_dir,
+                subjects=subjs_list,
+                mod_to_update=force_new_extraction,
+                n_procs=n_procs,
+            )

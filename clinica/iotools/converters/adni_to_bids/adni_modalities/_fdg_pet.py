@@ -10,6 +10,8 @@ from typing import List, Optional, Set, Tuple
 
 import pandas as pd
 
+from ._modalities import ADNIModality
+
 
 class ADNIPreprocessingStep(Enum):
     """ADNI preprocessing steps."""
@@ -82,10 +84,6 @@ def _convert_adni_fdg_pet(
         If specified, it should be between 1 and the number of available CPUs.
         Default=1.
     """
-    from pathlib import Path
-
-    import pandas as pd
-
     from clinica.iotools.converters.adni_to_bids.adni_utils import (
         load_clinical_csv,
         paths_to_bids,
@@ -111,11 +109,13 @@ def _convert_adni_fdg_pet(
     cprint(msg="FDG PET conversion done.", lvl="debug")
 
 
-def _get_modality_from_adni_preprocessing_step(step: ADNIPreprocessingStep) -> str:
+def _get_modality_from_adni_preprocessing_step(
+    step: ADNIPreprocessingStep,
+) -> ADNIModality:
     if step == ADNIPreprocessingStep.STEP2:
-        return "fdg"
+        return ADNIModality.PET_FDG
     if step == ADNIPreprocessingStep.STEP4_8MM:
-        return "fdg_uniform"
+        return ADNIModality.PET_FDG_UNIFORM
     raise ValueError(
         f"The ADNI preprocessing step {step} is not (yet) supported by the converter."
         f"The converter only supports {ADNIPreprocessingStep.STEP2} and "

@@ -1,9 +1,9 @@
-"""Module for converting FLAIR of ADNI."""
+"""Module for converting fMRI of ADNI."""
 from os import PathLike
 from typing import List, Optional
 
 
-def convert_adni_flair(
+def convert_adni_fmri(
     source_dir: PathLike,
     csv_dir: PathLike,
     destination_dir: PathLike,
@@ -12,7 +12,7 @@ def convert_adni_flair(
     mod_to_update: bool = False,
     n_procs: Optional[int] = 1,
 ):
-    """Convert FLAIR images of ADNI into BIDS format.
+    """Convert fMR images of ADNI into BIDS format.
 
     Parameters
     ----------
@@ -46,25 +46,30 @@ def convert_adni_flair(
     )
     from clinica.utils.stream import cprint
 
+    from ._modalities import ADNIModality
+
     if not subjects:
         adni_merge = load_clinical_csv(csv_dir, "ADNIMERGE")
         subjects = list(adni_merge.PTID.unique())
 
     cprint(
-        f"Calculating paths of FLAIR images. Output will be stored in {conversion_dir}.",
-        lvl="info",
+        f"Calculating paths of fMRI images. Output will be stored in {conversion_dir}."
     )
-    images = compute_flair_paths(source_dir, csv_dir, subjects, conversion_dir)
-    cprint("Paths of FLAIR images found. Exporting images into BIDS ...", lvl="info")
-    # flair_paths_to_bids(images, dest_dir)
+    images = compute_fmri_path(source_dir, csv_dir, subjects, conversion_dir)
+    cprint("Paths of fMRI images found. Exporting images into BIDS ...")
+    # fmri_paths_to_bids(dest_dir, images)
     paths_to_bids(
-        images, destination_dir, "flair", mod_to_update=mod_to_update, n_procs=n_procs
+        images,
+        destination_dir,
+        ADNIModality.FMRI,
+        mod_to_update=mod_to_update,
+        n_procs=n_procs,
     )
-    cprint(msg="FLAIR conversion done.", lvl="debug")
+    cprint(msg="fMRI conversion done.", lvl="debug")
 
 
-def compute_flair_paths(source_dir, csv_dir, subjs_list, conversion_dir):
-    """Compute the paths to the FLAIR images and store them in a TSV file.
+def compute_fmri_path(source_dir, csv_dir, subjs_list, conversion_dir):
+    """Compute the paths to fMR images.
 
     Args:
         source_dir: path to the ADNI directory
@@ -73,7 +78,7 @@ def compute_flair_paths(source_dir, csv_dir, subjs_list, conversion_dir):
         conversion_dir: path to the TSV files including the paths to original images
 
     Returns:
-        images: a dataframe with all the paths to the FLAIR images that will be converted into BIDS
+        pandas Dataframe containing the path for each fmri
     """
     from os import path
 
@@ -85,36 +90,49 @@ def compute_flair_paths(source_dir, csv_dir, subjs_list, conversion_dir):
         visits_to_timepoints,
     )
 
-    flair_col_df = [
+    fmri_col = [
         "Subject_ID",
         "VISCODE",
         "Visit",
         "Sequence",
         "Scan_Date",
         "Study_ID",
+        "Field_Strength",
         "Series_ID",
         "Image_ID",
-        "Field_Strength",
-        "Scanner",
     ]
-    flair_df = pd.DataFrame(columns=flair_col_df)
-    flair_dfs_list = []
+    fmri_df = pd.DataFrame(columns=fmri_col)
+    fmri_dfs_list = []
 
     # Loading needed .csv files
     adni_merge = load_clinical_csv(csv_dir, "ADNIMERGE")
+
     mayo_mri_qc = load_clinical_csv(csv_dir, "MAYOADIRL_MRI_IMAGEQC_12_08_15")
-    mayo_mri_qc = mayo_mri_qc[mayo_mri_qc.series_type == "AFL"]
+
+    mayo_mri_qc = mayo_mri_qc[mayo_mri_qc.series_type == "fMRI"]
+    mayo_mri_qc.columns = [x.upper() for x in mayo_mri_qc.columns]
+
+    mayo_mri_qc3 = load_clinical_csv(csv_dir, "MAYOADIRL_MRI_QUALITY_ADNI3")
+    mayo_mri_qc3 = mayo_mri_qc3[mayo_mri_qc3.SERIES_TYPE == "EPB"]
+
+    # Concatenating visits in both QC files
+    mayo_mri_qc = pd.concat(
+        [mayo_mri_qc, mayo_mri_qc3], axis=0, ignore_index=True, sort=False
+    )
     mri_list = load_clinical_csv(csv_dir, "MRILIST")
 
-    # Selecting FLAIR DTI images that are not MPR
-    mri_list = mri_list[mri_list.SEQUENCE.str.contains("flair", case=False, na=False)]
-    unwanted_sequences = ["_MPR_"]
+    # Selecting only fMRI images that are not Multiband
+    mri_list = mri_list[
+        mri_list.SEQUENCE.str.contains("MRI")
+    ]  # 'MRI' includes all fMRI and fMRI scans, but not others
+    unwanted_sequences = ["MB"]
     mri_list = mri_list[
         mri_list.SEQUENCE.map(
             lambda x: not any(subs in x for subs in unwanted_sequences)
         )
     ]
 
+    # We will convert the images for each subject in the subject list
     for subj in subjs_list:
         # Filter ADNIMERGE, MRI_LIST and QC for only one subject and sort the rows/visits by examination date
         adnimerge_subj = adni_merge[adni_merge.PTID == subj]
@@ -126,77 +144,66 @@ def compute_flair_paths(source_dir, csv_dir, subjs_list, conversion_dir):
         mayo_mri_qc_subj = mayo_mri_qc[mayo_mri_qc.RID == int(subj[-4:])]
 
         # Obtain corresponding timepoints for the subject visits
-        visits = visits_to_timepoints(subj, mri_list_subj, adnimerge_subj, "FLAIR")
+        visits = visits_to_timepoints(subj, mri_list_subj, adnimerge_subj, "fMRI")
 
         for visit_info in visits.keys():
             timepoint = visit_info[0]
             visit_str = visits[visit_info]
 
             visit_mri_list = mri_list_subj[mri_list_subj.VISIT == visit_str]
-            flair = flair_image(
+            image = fmri_image(
                 subj, timepoint, visits[visit_info], visit_mri_list, mayo_mri_qc_subj
             )
 
-            if flair is not None:
+            if image is not None:
                 row_to_append = pd.DataFrame(
-                    flair,
+                    image,
                     index=[
                         "i",
                     ],
                 )
-                flair_dfs_list.append(row_to_append)
+                fmri_dfs_list.append(row_to_append)
 
-    if flair_dfs_list:
-        flair_df = pd.concat(flair_dfs_list, ignore_index=True)
+    if fmri_dfs_list:
+        fmri_df = pd.concat(fmri_dfs_list, ignore_index=True)
 
     # Exceptions
     # ==========
-    conversion_errors = [  # Eq_1 images
-        ("141_S_0767", "m84"),
-        ("067_S_5205", "bl"),
-        ("127_S_4928", "m24"),
-        ("024_S_4674", "m06"),
-        ("123_S_2363", "m24"),
-        ("053_S_4578", "m48"),
-        ("128_S_4586", "m48"),
-        ("053_S_4813", "m48"),
-        ("053_S_5272", "m24"),
-        ("013_S_1186", "m48"),
-        ("031_S_2022", "bl"),
-        ("031_S_2022", "m06"),
-        ("031_S_2233", "bl"),
-        ("031_S_2233", "m03"),
+    conversion_errors = [
+        ("006_S_4485", "m84"),
+        ("123_S_4127", "m96"),
+        # Eq_1
+        ("094_S_4503", "m24"),
+        ("009_S_4388", "m72"),
+        ("036_S_6088", "bl"),
+        ("036_S_6134", "bl"),
+        ("016_S_6802", "bl"),
+        ("016_S_6816", "bl"),
+        ("126_S_4891", "m84"),
+        # Multiple images
         ("029_S_2395", "m72"),
-        ("130_S_6043", "bl"),
-        ("031_S_2018", "bl"),
-        ("027_S_5170", "m72"),
-        ("135_S_6284", "m12"),
-        ("068_S_0127", "m180"),
-        ("068_S_2187", "m120"),
-        # Several output images
-        ("114_S_6039", "bl"),
     ]
 
     # Removing known exceptions from images to convert
-    if not flair_df.empty:
-        error_ind = flair_df.index[
-            flair_df.apply(
+    if not fmri_df.empty:
+        error_ind = fmri_df.index[
+            fmri_df.apply(
                 lambda x: ((x.Subject_ID, x.VISCODE) in conversion_errors), axis=1
             )
         ]
-        flair_df.drop(error_ind, inplace=True)
+        fmri_df.drop(error_ind, inplace=True)
 
     # Checking for images paths in filesystem
-    images = find_image_path(flair_df, source_dir, "FLAIR", "S", "Series_ID")
-    images.to_csv(path.join(conversion_dir, "flair_paths.tsv"), sep="\t", index=False)
+    images = find_image_path(fmri_df, source_dir, "fMRI", "S", "Series_ID")
+    images.to_csv(path.join(conversion_dir, "fmri_paths.tsv"), sep="\t", index=False)
 
     return images
 
 
-def flair_image(subject_id, timepoint, visit_str, visit_mri_list, mri_qc_subj):
+def fmri_image(subject_id, timepoint, visit_str, visit_mri_list, mri_qc_subj):
     """
     One image among those in the input list is chosen according to QC
-    and then corresponding metadata is extracted to a dictionary
+    and then corresponding metadata is extracted to a dictionary.
 
     Args:
         subject_id: Subject identifier
@@ -212,8 +219,9 @@ def flair_image(subject_id, timepoint, visit_str, visit_mri_list, mri_qc_subj):
         select_image_qc,
     )
 
+    mri_qc_subj.columns = [x.lower() for x in mri_qc_subj.columns]
     sel_image = select_image_qc(list(visit_mri_list.IMAGEUID), mri_qc_subj)
-    if sel_image is None:
+    if not sel_image:
         return None
 
     sel_scan = visit_mri_list[visit_mri_list.IMAGEUID == sel_image].iloc[0]

@@ -1,11 +1,11 @@
-from typing import List, Optional
+from typing import Optional, Tuple
 
 import click
 
 from clinica import option
 from clinica.iotools.converters import cli_param
 
-ALL_MODALITIES = ("T1", "PET_FDG", "PET_AMYLOID", "PET_TAU", "DWI", "FLAIR", "fMRI")
+from .adni_to_bids import ADNIUserFacingModality
 
 
 @click.command(name="adni-to-bids")
@@ -29,8 +29,8 @@ ALL_MODALITIES = ("T1", "PET_FDG", "PET_AMYLOID", "PET_TAU", "DWI", "FLAIR", "fM
     "-m",
     "--modalities",
     multiple=True,
-    type=click.Choice(ALL_MODALITIES),
-    default=ALL_MODALITIES,
+    type=click.Choice(ADNIUserFacingModality),
+    default=[modality for modality in ADNIUserFacingModality],
     help="Convert only the selected modality. By default, all available modalities are converted.",
 )
 @click.option(
@@ -46,7 +46,7 @@ def cli(
     subjects_list: Optional[str] = None,
     clinical_data_only: bool = False,
     force_new_extraction: bool = False,
-    modalities: List[str] = ALL_MODALITIES,
+    modalities: Tuple[str] = ADNIUserFacingModality,
     n_procs: Optional[int] = None,
 ) -> None:
     """ADNI to BIDS converter.

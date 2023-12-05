@@ -1,8 +1,13 @@
+from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 import pandas as pd
+
+from clinica.utils.pet import ReconstructionMethod, Tracer
+
+from .adni_modalities import ADNIModality
 
 
 class ADNIStudy(Enum):
@@ -1219,7 +1224,7 @@ def find_image_path(images, source_dir, modality, prefix, id_field):
 def paths_to_bids(
     images: pd.DataFrame,
     bids_dir: str,
-    modality: str,
+    modality: ADNIModality,
     mod_to_update: bool = False,
     n_procs: Optional[int] = 1,
 ) -> List[Path]:
@@ -1233,7 +1238,7 @@ def paths_to_bids(
     bids_dir : str
         Path to the output BIDS directory.
 
-    modality : str
+    modality : ADNIModality
         Imaging modality.
 
     mod_to_update : bool
@@ -1254,38 +1259,148 @@ def paths_to_bids(
     from functools import partial
     from multiprocessing import Pool
 
-    if modality.lower() not in (
-        "t1",
-        "dwi",
-        "flair",
-        "fmri",
-        "fdg",
-        "fdg_uniform",
-        "pib",
-        "av45_fbb",
-        "tau",
-    ):
-        raise RuntimeError(
-            f"{modality.lower()} is not supported for conversion in paths_to_bids."
-        )
-
-    bids_dir = Path(bids_dir)
-    images_list = list([data for _, data in images.iterrows()])
+    images_metadata = [ImageMetaData.from_series(row) for _, row in images.iterrows()]
 
     with Pool(processes=n_procs) as pool:
         create_file_ = partial(
             create_file,
             modality=modality,
-            bids_dir=bids_dir,
+            bids_dir=Path(bids_dir),
             mod_to_update=mod_to_update,
         )
-        output_file_treated = pool.map(create_file_, images_list)
+        output_file_treated = pool.map(create_file_, images_metadata)
 
     return output_file_treated
 
 
+@dataclass
+class ImageMetaData:
+    """Metadata describing an image in ADNI.
+
+    Attributes
+    ----------
+    id : str
+        The image identifier.
+
+    subject_id : str
+        The identifier of the subject for which this image was acquired.
+
+    visit_code : str
+        The label for the visit in ADNI format.
+
+    session : str
+        The label for the visit in BIDS format.
+
+    path : Path
+        The path to the raw image.
+
+    is_dicom : bool
+        Whether the image is in DICOM format or not.
+
+    tracer : Tracer, optional
+        The tracer used if the image is a PET scan.
+        This is None otherwise.
+    """
+
+    id: str
+    subject_id: str
+    visit_code: str
+    session: str
+    path: Path
+    is_dicom: bool
+    tracer: Optional[Tracer]
+
+    @classmethod
+    def from_series(cls, series: pd.Series):
+        from clinica.iotools.converter_utils import viscode_to_session
+
+        if series.Subject_ID in ("002_S_0295", "002_S_4262", "002_S_5178"):
+            with open("./rows.txt", "a") as fp:
+                fp.write(f"{series}")
+
+        try:
+            tracer = Tracer(series.Tracer)
+        except Exception:
+            tracer = None
+        try:
+            path = Path(series.Path)
+        except Exception:
+            path = None
+        return cls(
+            series.Image_ID,
+            series.Subject_ID,
+            series.VISCODE,
+            viscode_to_session(series.VISCODE),
+            path,
+            series.Is_Dicom,
+            tracer,
+        )
+
+
+@dataclass
+class ModalityConfiguration:
+    """Configuration for the image file.
+
+    Attributes
+    ----------
+    modality : str
+        The modality.
+
+    suffix : str
+        The suffix to be used for the BIDS filename.
+
+    center : bool
+        Whether the image should be centered or not.
+
+    json : bool
+        Whether a JSON sidecar file is expected or not.
+    """
+
+    modality: str
+    suffix: str
+    center: bool
+    json: bool
+
+
+def _load_configuration(modality: ADNIModality) -> ModalityConfiguration:
+    """Factory method to create a modality configuration."""
+    if modality == ADNIModality.T1:
+        return ModalityConfiguration("anat", "T1w", True, False)
+    if modality == ADNIModality.DWI:
+        return ModalityConfiguration("dwi", "dwi", False, True)
+    if modality == ADNIModality.FLAIR:
+        return ModalityConfiguration("anat", "FLAIR", True, True)
+    if modality == ADNIModality.FMRI:
+        return ModalityConfiguration("func", "task-rest_bold", False, True)
+    if modality == ADNIModality.PET_FDG:
+        return ModalityConfiguration(
+            "pet",
+            f"trc-{Tracer.FDG}_rec-{ReconstructionMethod.CO_REGISTERED_AVERAGED}_pet",
+            True,
+            False,
+        )
+    if modality == ADNIModality.PET_FDG_UNIFORM:
+        return ModalityConfiguration(
+            "pet",
+            f"trc-{Tracer.FDG}_rec-{ReconstructionMethod.COREGISTERED_ISOTROPIC}_pet",
+            True,
+            False,
+        )
+    if modality == ADNIModality.PET_PIB:
+        return ModalityConfiguration("pet", f"trc-{Tracer.PIB}_pet", True, False)
+    if modality == ADNIModality.PET_AV45:
+        return ModalityConfiguration("pet", f"trc-{Tracer.AV45}_pet", True, False)
+    if modality == ADNIModality.PET_FBB:
+        return ModalityConfiguration("pet", f"trc-{Tracer.FBB}_pet", True, False)
+    if modality == ADNIModality.PET_TAU:
+        return ModalityConfiguration("pet", f"trc-{Tracer.AV1451}_pet", True, False)
+
+
 def create_file(
-    image, modality: str, bids_dir: Path, mod_to_update: bool
+    image_metadata: ImageMetaData,
+    modality: ADNIModality,
+    bids_dir: Path,
+    mod_to_update: bool,
 ) -> Optional[Path]:
     """Creates an image file at the corresponding output folder.
 
@@ -1294,9 +1409,10 @@ def create_file(
 
     Parameters
     ----------
-    image: Image metadata
+    image_metadata : ImageMetaData
+        Image metadata
 
-    modality : str
+    modality : ADNIModality
         Imaging modality.
 
     bids_dir : Path
@@ -1312,113 +1428,25 @@ def create_file(
         The path to the output image created.
         If the conversion wasn't successful, this function returns None.
     """
-    import os
-    import re
-    import shutil
-
-    from clinica.iotools.bids_utils import run_dcm2niix
-    from clinica.iotools.converter_utils import viscode_to_session
-    from clinica.iotools.utils.data_handling import center_nifti_origin
-    from clinica.utils.pet import ReconstructionMethod, Tracer
     from clinica.utils.stream import cprint
 
-    modality_specific = {
-        "t1": {
-            "output_path": "anat",
-            "output_filename": "_T1w",
-            "to_center": True,
-            "json": "n",
-        },
-        "dwi": {
-            "output_path": "dwi",
-            "output_filename": "_dwi",
-            "to_center": False,
-            "json": "y",
-        },
-        "flair": {
-            "output_path": "anat",
-            "output_filename": "_FLAIR",
-            "to_center": True,
-            "json": "y",
-        },
-        "fmri": {
-            "output_path": "func",
-            "output_filename": "_task-rest_bold",
-            "to_center": False,
-            "json": "y",
-        },
-        "fdg": {
-            "output_path": "pet",
-            "output_filename": f"_trc-{Tracer.FDG}_rec-{ReconstructionMethod.CO_REGISTERED_AVERAGED}_pet",
-            "to_center": True,
-            "json": "n",
-        },
-        "fdg_uniform": {
-            "output_path": "pet",
-            "output_filename": f"_trc-{Tracer.FDG}_rec-{ReconstructionMethod.COREGISTERED_ISOTROPIC}_pet",
-            "to_center": True,
-            "json": "n",
-        },
-        "pib": {
-            "output_path": "pet",
-            "output_filename": f"_trc-{Tracer.PIB}_pet",
-            "to_center": True,
-            "json": "n",
-        },
-        "av45": {
-            "output_path": "pet",
-            "output_filename": f"_trc-{Tracer.AV45}_pet",
-            "to_center": True,
-            "json": "n",
-        },
-        "fbb": {
-            "output_path": "pet",
-            "output_filename": f"_trc-{Tracer.FBB}_pet",
-            "to_center": True,
-            "json": "n",
-        },
-        "tau": {
-            "output_path": "pet",
-            "output_filename": f"_trc-{Tracer.AV1451}_pet",
-            "to_center": True,
-            "json": "n",
-        },
-    }
-
-    subject = image.Subject_ID
-    viscode = image.VISCODE
-
-    if modality == "av45_fbb":
-        modality = image.Tracer.lower()
-
-    if not image.Path:
+    config = _load_configuration(modality)
+    if not image_metadata.path:
         cprint(
-            f"[{modality.upper()}] No path specified for {subject} in session {viscode}",
+            f"[{modality.upper()}] No path specified for {image_metadata.subject_id} in session {image_metadata.session}",
             lvl="info",
         )
         return None
     cprint(
-        f"[{modality.upper()}] Processing subject {subject} in session {viscode}",
+        f"[{modality.upper()}] Processing subject {image_metadata.subject_id} in session {image_metadata.session}",
         lvl="info",
     )
 
-    session = viscode_to_session(viscode)
-
-    image_path = image.Path
-    image_id = image.Image_ID
-    # If the original image is a DICOM, check if contains two DICOM inside the same folder
-    if image.Is_Dicom:
-        image_path = check_two_dcm_folder(image_path, str(bids_dir), image_id)
-    bids_subj = subject.replace("_", "")
+    bids_subj = image_metadata.subject_id.replace("_", "")
     output_path = (
-        bids_dir
-        / f"sub-ADNI{bids_subj}"
-        / session
-        / modality_specific[modality]["output_path"]
+        bids_dir / f"sub-ADNI{bids_subj}" / image_metadata.session / config.modality
     )
-    output_filename = (
-        f"sub-ADNI{bids_subj}_{session}{modality_specific[modality]['output_filename']}"
-    )
+    output_filename = f"sub-ADNI{bids_subj}_{image_metadata.session}_{config.suffix}"
     output_path.mkdir(parents=True, exist_ok=True)
 
     # If updated mode is selected, check if an old image is existing and remove it
@@ -1434,98 +1462,129 @@ def create_file(
         cprint(f"Removing old image {image_to_remove}...", lvl="info")
         image_to_remove.unlink()
 
-    generate_json = modality_specific[modality]["json"]
-    zip_image = "n" if modality_specific[modality]["to_center"] else "y"
+    if image_metadata.is_dicom:
+        output_image = _convert_dicom_image(
+            modality, image_metadata, bids_dir, output_path, output_filename
+        )
+    else:
+        output_image = _center_or_copy(
+            image_metadata, config, output_path, output_filename
+        )
+
+    _remove_tmp_dmc_folder(bids_dir, image_metadata.id)
+
+    return output_image
+
+
+def _convert_dicom_image(
+    modality: ADNIModality,
+    image_metadata: ImageMetaData,
+    bids_dir: Path,
+    output_path: Path,
+    output_filename: str,
+) -> Path:
+    """Convert the DICOM image to nifti."""
+    import os
+    import re
+
+    from clinica.iotools.bids_utils import run_dcm2niix
+    from clinica.iotools.utils.data_handling import center_nifti_origin
+    from clinica.utils.stream import cprint
+
+    config = _load_configuration(modality)
+    # If the original image is a DICOM, check if contains two DICOM inside the same folder
+    image_path = _check_two_dcm_folder(image_metadata.path, bids_dir, image_metadata.id)
     file_without_extension = output_path / output_filename
     output_image = file_without_extension.with_suffix(".nii.gz")
-
-    if image.Is_Dicom:
-        success = run_dcm2niix(
-            input_dir=image_path,
-            output_dir=output_path,
-            output_fmt=output_filename,
-            compress=True if zip_image == "y" else False,
-            bids_sidecar=True if generate_json == "y" else False,
+    success = run_dcm2niix(
+        input_dir=str(image_path),
+        output_dir=str(output_path),
+        output_fmt=output_filename,
+        compress=not config.center,
+        bids_sidecar=config.json,
+    )
+    if not success:
+        cprint(
+            f"Error converting image {image_path} for subject {image_metadata.subject_id} and session {image_metadata.session}",
+            lvl="warning",
         )
-        if not success:
+    # If "_t" - the trigger delay time - exists in dcm2niix output filename, we remove it
+    for trigger_time in output_path.glob(f"{output_filename}_t[0-9]*"):
+        res = re.search(r"_t\d+\.", str(trigger_time))
+        no_trigger_time = str(trigger_time).replace(
+            trigger_time[res.start() : res.end()], "."
+        )
+        os.rename(trigger_time, no_trigger_time)
+
+    # Removing images with unsupported suffixes if generated by dcm2niix
+    for suffix in ("ADC", "real", "imaginary"):
+        file_with_bad_suffix = output_path / f"{output_filename}_{suffix}"
+        if file_with_bad_suffix.with_suffix(".nii").exists():
             cprint(
-                f"Error converting image {image_path} for subject {subject} and session {session}",
+                f"Image with bad suffix {suffix} was generated by dcm2niix "
+                f"for subject {image_metadata.subject_id} and session {image_metadata.session} : "
+                f"{file_with_bad_suffix.with_suffix('.nii.gz')}. This image will NOT "
+                "be converted as the suffix is not supported by Clinica.",
                 lvl="warning",
             )
-        # If "_t" - the trigger delay time - exists in dcm2niix output filename, we remove it
-        for trigger_time in output_path.glob(f"{output_filename}_t[0-9]*"):
-            res = re.search(r"_t\d+\.", str(trigger_time))
-            no_trigger_time = str(trigger_time).replace(
-                trigger_time[res.start() : res.end()], "."
-            )
-            os.rename(trigger_time, no_trigger_time)
+            for file_to_delete in output_path.glob(f"{output_filename}_{suffix}*"):
+                cprint(f"Deleting file {file_to_delete}.", lvl="info")
+                os.remove(file_to_delete)
 
-        # Removing images with unsupported suffixes if generated by dcm2niix
-        for suffix in ("ADC", "real", "imaginary"):
-            file_with_bad_suffix = output_path / f"{output_filename}_{suffix}"
-            if file_with_bad_suffix.with_suffix(".nii").exists():
-                cprint(
-                    f"Image with bad suffix {suffix} was generated by dcm2niix "
-                    f"for subject {subject} and session {session} : "
-                    f"{file_with_bad_suffix.with_suffix('.nii.gz')}. This image will NOT "
-                    "be converted as the suffix is not supported by Clinica.",
-                    lvl="warning",
-                )
-                for file_to_delete in output_path.glob(f"{output_filename}_{suffix}*"):
-                    cprint(f"Deleting file {file_to_delete}.", lvl="info")
-                    os.remove(file_to_delete)
-
-        # Conditions to check if output NIFTI files exists,
-        # and, if DWI, if .bvec and .bval files are also present
-        nifti_exists = (
-            file_without_extension.with_suffix(".nii").is_file()
-            or output_image.is_file()
+    # Conditions to check if output NIFTI files exists,
+    # and, if DWI, if .bvec and .bval files are also present
+    nifti_exists = (
+        file_without_extension.with_suffix(".nii").is_file() or output_image.is_file()
+    )
+    dwi_bvec_and_bval_exist = not (modality == ADNIModality.DWI) or (
+        file_without_extension.with_suffix(".bvec").is_file()
+        and file_without_extension.with_suffix(".bval").is_file()
+    )
+    # Check if conversion worked (output files exist)
+    if not nifti_exists or not dwi_bvec_and_bval_exist:
+        cprint(
+            msg=f"Conversion with dcm2niix failed for subject {image_metadata.subject_id} and session {image_metadata.session}",
+            lvl="warning",
         )
-        dwi_bvec_and_bval_exist = not (modality == "dwi") or (
-            file_without_extension.with_suffix(".bvec").is_file()
-            and file_without_extension.with_suffix(".bval").is_file()
+        return None
+    # Case when JSON file was expected, but not generated by dcm2niix
+    elif config.json and not file_without_extension.with_suffix(".json").exists():
+        cprint(
+            msg=f"JSON file not generated by dcm2niix for subject {image_metadata.subject_id} and session {image_metadata.session}",
+            lvl="warning",
         )
+    if config.center:
+        center_nifti_origin(file_without_extension.with_suffix(".nii"), output_image)
+        file_without_extension.with_suffix(".nii").unlink()
 
-        # Check if conversion worked (output files exist)
-        if not nifti_exists or not dwi_bvec_and_bval_exist:
+    return output_image
+
+
+def _center_or_copy(
+    image_metadata: ImageMetaData,
+    config: ModalityConfiguration,
+    output_path: Path,
+    output_filename: str,
+) -> Path:
+    import shutil
+
+    from clinica.iotools.utils.data_handling import center_nifti_origin
+    from clinica.utils.stream import cprint
+
+    output_image = output_path / f"{output_filename}.nii.gz"
+    if config.center:
+        center_nifti_origin(image_metadata.path, output_image)
+        if not output_image:
             cprint(
-                msg=f"Conversion with dcm2niix failed for subject {subject} and session {session}",
-                lvl="warning",
+                msg=(
+                    f"For subject {image_metadata.subject_id} in session {image_metadata.session}, "
+                    f"an error occurred whilst recentering Nifti image: {image_metadata.path}"
+                ),
+                lvl="error",
             )
-            return None
-
-        # Case when JSON file was expected, but not generated by dcm2niix
-        elif (
-            generate_json == "y"
-            and not file_without_extension.with_suffix(".json").exists()
-        ):
-            cprint(
-                msg=f"JSON file not generated by dcm2niix for subject {subject} and session {session}",
-                lvl="warning",
-            )
-
-        if modality_specific[modality]["to_center"]:
-            center_nifti_origin(
-                file_without_extension.with_suffix(".nii"), output_image
-            )
-            file_without_extension.with_suffix(".nii").unlink()
-
     else:
-        if modality_specific[modality]["to_center"]:
-            center_nifti_origin(image_path, output_image)
-            if not output_image:
-                cprint(
-                    msg=(
-                        f"For subject {subject} in session {session}, "
-                        f"an error occurred whilst recentering Nifti image: {image_path}"
-                    ),
-                    lvl="error",
-                )
-        else:
-            shutil.copy(image_path, output_image)
+        shutil.copy(image_metadata.path, output_image)
 
-    # Check if there is still the folder tmp_dcm_folder and remove it
-    remove_tmp_dmc_folder(bids_dir, image_id)
     return output_image
 
 
@@ -1548,59 +1607,64 @@ def session_label_to_viscode(session_name: str) -> str:
         return f"m{(int(session_name[1:])):02d}"
 
 
-def check_two_dcm_folder(dicom_path, bids_folder, image_uid):
-    """[summary].
-
-    Check if a folder contains more than one DICOM and if yes, copy the DICOM related to
+def _check_two_dcm_folder(dicom_path: Path, bids_folder: Path, image_uid: str) -> Path:
+    """Check if a folder contains more than one DICOM and if yes, copy the DICOM related to
     image id passed as parameter into a temporary folder called tmp_dicom_folder.
 
-    Args:
-        dicom_path (str): path to the DICOM folder
-        bids_folder (str): path to the BIDS folder where the dataset will be stored
-        image_uid (str): image id of the fMRI
+    Parameters
+    ----------
+    dicom_path : Path
+        The path to the DICOM folder.
 
-    Returns:
-        str: path to the original DICOM folder or the path to a temporary folder called
-            tmp_dicom_folder where only the DICOM to convert is copied
+    bids_folder : Path
+        The path to the BIDS folder where the dataset will be stored.
+
+    image_uid : str
+        Image id of the fMRI.
+
+    Returns
+    -------
+    Path :
+        The path to the original DICOM folder or the path to a temporary folder called
+        tmp_dicom_folder where only the DICOM to convert is copied
     """
-    import os
     import shutil
-    from glob import glob
-    from os import path
     from shutil import copy
 
-    temp_folder_name = f"tmp_dcm_folder_{str(image_uid).strip(' ')}"
-    dest_path = path.join(bids_folder, temp_folder_name)
-
+    destination_path = _get_tmp_dcm_folder(bids_folder, image_uid)
     # Check if there are dicom files inside the folder not belonging to the desired image
-    dicom_list = glob(path.join(dicom_path, "*.dcm"))
-    image_list = glob(path.join(dicom_path, f"*{image_uid}.dcm"))
+    dicom_list = [p for p in dicom_path.glob("*.dcm")]
+    image_list = [p for p in dicom_path.glob(f"*{image_uid}.dcm")]
     if len(dicom_list) != len(image_list):
-        # Remove the precedent tmp_dcm_folder if present.
-        if os.path.exists(dest_path):
-            shutil.rmtree(dest_path)
-        os.mkdir(dest_path)
-        dmc_to_conv = glob(path.join(dicom_path, f"*{str(image_uid)}.dcm*"))
-        for d in dmc_to_conv:
-            copy(d, dest_path)
-        return dest_path
-    else:
-        return dicom_path
+        if destination_path.exists():
+            shutil.rmtree(destination_path)
+        destination_path.mkdir(parents=True)
+        for d in dicom_path.glob(f"*{image_uid}.dcm*"):
+            copy(d, destination_path)
+        return destination_path
+    return dicom_path
 
 
-def remove_tmp_dmc_folder(bids_dir, image_id):
-    """Remove the folder tmp_dmc_folder created by the method check_two_dcm_folder (if existing).
+def _get_tmp_dcm_folder(bids_dir: Path, image_id: str) -> Path:
+    return bids_dir / f"tmp_dcm_folder_{str(image_id).strip(' ')}"
 
-    Args:
-        bids_dir: path to the BIDS directory
-        image_id:
+
+def _remove_tmp_dmc_folder(bids_dir: Path, image_id: str) -> None:
+    """Remove the folder tmp_dmc_folder created by the method _check_two_dcm_folder (if existing).
+
+    Parameters
+    ----------
+    bids_dir : Path
+        The path to the BIDS directory.
+
+    image_id : str
+        The image identifier.
     """
-    from os.path import exists, join
     from shutil import rmtree
 
-    tmp_dcm_folder_path = join(bids_dir, f"tmp_dcm_folder_{str(image_id).strip(' ')}")
-    if exists(tmp_dcm_folder_path):
-        rmtree(tmp_dcm_folder_path)
+    folder = _get_tmp_dcm_folder(bids_dir, image_id)
+    if folder.exists():
+        rmtree(folder)
 
 
 def load_clinical_csv(clinical_dir: str, filename: str) -> pd.DataFrame:
